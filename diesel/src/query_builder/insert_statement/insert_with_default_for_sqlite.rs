@@ -546,19 +546,18 @@ where
                 let stmt =
                     InsertStatement::new(query.target, record, query.operator, query.returning);
 
-                let result = stmt
-                    .internal_load(conn)?
-                    .next()
-                    .ok_or(crate::result::Error::NotFound)?;
-
-                match &result {
-                    Ok(_) | Err(crate::result::Error::DeserializationError(_)) => {
-                        results.push(result)
-                    }
-                    Err(_) => {
-                        result?;
-                    }
-                };
+                // A statement might not return any row, for example
+                // if the row was skipped by `ON CONFLICT DO NOTHING`
+                for result in stmt.internal_load(conn)? {
+                    match &result {
+                        Ok(_) | Err(crate::result::Error::DeserializationError(_)) => {
+                            results.push(result)
+                        }
+                        Err(_) => {
+                            result?;
+                        }
+                    };
+                }
             }
 
             Ok(results.into_iter())
@@ -615,19 +614,18 @@ where
                     into_clause: query.into_clause,
                 };
 
-                let result = stmt
-                    .internal_load(conn)?
-                    .next()
-                    .ok_or(crate::result::Error::NotFound)?;
-
-                match &result {
-                    Ok(_) | Err(crate::result::Error::DeserializationError(_)) => {
-                        results.push(result)
-                    }
-                    Err(_) => {
-                        result?;
-                    }
-                };
+                // A statement might not return any row, for example
+                // if the row was skipped by `ON CONFLICT DO NOTHING`
+                for result in stmt.internal_load(conn)? {
+                    match &result {
+                        Ok(_) | Err(crate::result::Error::DeserializationError(_)) => {
+                            results.push(result)
+                        }
+                        Err(_) => {
+                            result?;
+                        }
+                    };
+                }
             }
 
             Ok(results.into_iter())

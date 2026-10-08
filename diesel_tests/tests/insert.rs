@@ -1096,6 +1096,45 @@ fn batch_upsert_with_defaultables_and_returning_is_atomic_on_sqlite() {
     assert_eq!(Ok(0), users.count().get_result(connection));
 }
 
+#[diesel_test_helper::test]
+#[cfg(feature = "returning_clauses_for_sqlite_3_35")]
+fn batch_upsert_with_defaultables_and_returning_skips_conflicting_rows_on_sqlite() {
+    use crate::schema::users::dsl::*;
+    let connection = &mut connection_with_sean_and_tess_in_users_table();
+
+    let new_users = vec![
+        (id.eq(1), name.eq("Jim"), Some(hair_color.eq("black"))),
+        (id.eq(3), name.eq("Ruby"), None),
+    ];
+    let inserted_names = insert_into(users)
+        .values(&new_users)
+        .on_conflict_do_nothing()
+        .returning(name)
+        .get_results::<String>(connection);
+
+    assert_eq!(Ok(vec![String::from("Ruby")]), inserted_names);
+    assert_eq!(Ok(3), users.count().get_result(connection));
+}
+
+#[diesel_test_helper::test]
+#[cfg(feature = "returning_clauses_for_sqlite_3_35")]
+fn batch_insert_or_ignore_with_defaultables_and_returning_skips_ignored_rows_on_sqlite() {
+    use crate::schema::users::dsl::*;
+    let connection = &mut connection_with_sean_and_tess_in_users_table();
+
+    let new_users = vec![
+        (id.eq(1), name.eq("Jim"), Some(hair_color.eq("black"))),
+        (id.eq(3), name.eq("Ruby"), None),
+    ];
+    let inserted_names = diesel::insert_or_ignore_into(users)
+        .values(&new_users)
+        .returning(name)
+        .get_results::<String>(connection);
+
+    assert_eq!(Ok(vec![String::from("Ruby")]), inserted_names);
+    assert_eq!(Ok(3), users.count().get_result(connection));
+}
+
 // regression test for https://github.com/diesel-rs/diesel/issues/2898
 #[diesel_test_helper::test]
 fn mixed_defaultable_insert() {
