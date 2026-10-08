@@ -191,6 +191,7 @@ where
     }
 }
 
+/// Marker type: the inserted values might contain `DEFAULT` values
 #[allow(missing_debug_implementations, missing_copy_implementations)]
 pub struct Yes;
 
@@ -200,6 +201,7 @@ impl Default for Yes {
     }
 }
 
+/// Marker type: the inserted values do not contain `DEFAULT` values
 #[allow(missing_debug_implementations, missing_copy_implementations)]
 pub struct No;
 
@@ -635,6 +637,8 @@ where
     }
 }
 
+/// Batch insert values that are known to not contain any `DEFAULT` value
+/// and can therefore be inserted with a single statement
 #[allow(missing_debug_implementations, missing_copy_implementations)]
 #[repr(transparent)]
 pub struct SqliteBatchInsertWrapper<V, T, QId, const STATIC_QUERY_ID: bool>(
@@ -916,3 +920,230 @@ macro_rules! impl_contains_defaultable_value {
 }
 
 crate::for_each_tuple!(tuple_impls);
+
+#[cfg(feature = "i-implement-a-third-party-backend-and-opt-into-breaking-changes")]
+mod third_party_support {
+    use super::{BatchInsert, ContainsDefaultableValue, InsertStatement, SqliteBatchInsertWrapper};
+    use crate::query_builder::upsert::on_conflict_clause::OnConflictValues;
+    use crate::query_builder::{QueryExecutionStrategy, ValuesClause};
+    use crate::sqlite::Sqlite;
+    use crate::{QuerySource, Table};
+    use alloc::vec::Vec;
+    use core::marker::PhantomData;
+
+    /// The [`QueryExecutionStrategy`] of SQLite batch insert statements
+    ///
+    /// `ContainsDefaultableValue` is either [`Yes`](super::Yes) if the inserted
+    /// values might contain `DEFAULT` values or [`No`](super::No) otherwise.
+    #[allow(missing_debug_implementations, missing_copy_implementations)]
+    pub struct BatchInsertStrategy<ContainsDefaultableValue>(PhantomData<ContainsDefaultableValue>);
+
+    /// Convert a SQLite batch insert statement without default values
+    /// into a single statement that inserts all rows at once
+    pub trait IntoSingleStatement {
+        /// The resulting statement type
+        type Statement;
+
+        /// Perform the conversion
+        fn into_single_statement(self) -> Self::Statement;
+    }
+
+    /// Convert a SQLite batch insert statement into one statement per row
+    ///
+    /// The resulting statements should be executed inside of a transaction.
+    pub trait IntoRowStatements {
+        /// The resulting statement type
+        type Statement;
+
+        /// Perform the conversion
+        fn into_row_statements(self) -> Vec<Self::Statement>;
+    }
+
+    impl<V, T, QId, Op, Ret, const STATIC_QUERY_ID: bool> QueryExecutionStrategy<Sqlite>
+        for InsertStatement<
+            T,
+            BatchInsert<Vec<ValuesClause<V, T>>, T, QId, STATIC_QUERY_ID>,
+            Op,
+            Ret,
+        >
+    where
+        T: QuerySource,
+        V: ContainsDefaultableValue,
+    {
+        type Strategy = BatchInsertStrategy<V::Out>;
+    }
+
+    impl<V, T, QId, Op, Ret, Target, ConflictOpt, WhereClause, const STATIC_QUERY_ID: bool>
+        QueryExecutionStrategy<Sqlite>
+        for InsertStatement<
+            T,
+            OnConflictValues<
+                BatchInsert<Vec<ValuesClause<V, T>>, T, QId, STATIC_QUERY_ID>,
+                Target,
+                ConflictOpt,
+                WhereClause,
+            >,
+            Op,
+            Ret,
+        >
+    where
+        T: QuerySource,
+        V: ContainsDefaultableValue,
+    {
+        type Strategy = BatchInsertStrategy<V::Out>;
+    }
+
+    impl<V, T, QId, Op, Ret, const STATIC_QUERY_ID: bool> IntoSingleStatement
+        for InsertStatement<T, BatchInsert<V, T, QId, STATIC_QUERY_ID>, Op, Ret>
+    where
+        T: QuerySource,
+    {
+        type Statement =
+            InsertStatement<T, SqliteBatchInsertWrapper<V, T, QId, STATIC_QUERY_ID>, Op, Ret>;
+
+        fn into_single_statement(self) -> Self::Statement {
+            InsertStatement {
+                records: SqliteBatchInsertWrapper(self.records),
+                operator: self.operator,
+                target: self.target,
+                returning: self.returning,
+                into_clause: self.into_clause,
+            }
+        }
+    }
+
+    impl<V, T, QId, Op, Ret, Target, ConflictOpt, WhereClause, const STATIC_QUERY_ID: bool>
+        IntoSingleStatement
+        for InsertStatement<
+            T,
+            OnConflictValues<
+                BatchInsert<V, T, QId, STATIC_QUERY_ID>,
+                Target,
+                ConflictOpt,
+                WhereClause,
+            >,
+            Op,
+            Ret,
+        >
+    where
+        T: QuerySource,
+    {
+        type Statement = InsertStatement<
+            T,
+            OnConflictValues<
+                SqliteBatchInsertWrapper<V, T, QId, STATIC_QUERY_ID>,
+                Target,
+                ConflictOpt,
+                WhereClause,
+            >,
+            Op,
+            Ret,
+        >;
+
+        fn into_single_statement(self) -> Self::Statement {
+            InsertStatement {
+                operator: self.operator,
+                target: self.target,
+                records: OnConflictValues {
+                    values: SqliteBatchInsertWrapper(self.records.values),
+                    target: self.records.target,
+                    action: self.records.action,
+                    where_clause: self.records.where_clause,
+                },
+                returning: self.returning,
+                into_clause: self.into_clause,
+            }
+        }
+    }
+
+    impl<V, T, QId, Op, Ret, const STATIC_QUERY_ID: bool> IntoRowStatements
+        for InsertStatement<
+            T,
+            BatchInsert<Vec<ValuesClause<V, T>>, T, QId, STATIC_QUERY_ID>,
+            Op,
+            Ret,
+        >
+    where
+        T: Table + Copy,
+        Op: Copy,
+        Ret: Copy,
+    {
+        type Statement = InsertStatement<T, ValuesClause<V, T>, Op, Ret>;
+
+        fn into_row_statements(self) -> Vec<Self::Statement> {
+            let InsertStatement {
+                operator,
+                target,
+                records,
+                returning,
+                into_clause: _,
+            } = self;
+            records
+                .values
+                .into_iter()
+                .map(|record| InsertStatement::new(target, record, operator, returning))
+                .collect()
+        }
+    }
+
+    impl<V, T, QId, Op, Ret, Target, ConflictOpt, WhereClause, const STATIC_QUERY_ID: bool>
+        IntoRowStatements
+        for InsertStatement<
+            T,
+            OnConflictValues<
+                BatchInsert<Vec<ValuesClause<V, T>>, T, QId, STATIC_QUERY_ID>,
+                Target,
+                ConflictOpt,
+                WhereClause,
+            >,
+            Op,
+            Ret,
+        >
+    where
+        T: Table + Copy,
+        Op: Copy,
+        Ret: Copy,
+        Target: Copy,
+        ConflictOpt: Copy,
+        WhereClause: Copy,
+    {
+        type Statement = InsertStatement<
+            T,
+            OnConflictValues<ValuesClause<V, T>, Target, ConflictOpt, WhereClause>,
+            Op,
+            Ret,
+        >;
+
+        fn into_row_statements(self) -> Vec<Self::Statement> {
+            let InsertStatement {
+                operator,
+                target,
+                records,
+                returning,
+                into_clause: _,
+            } = self;
+            let OnConflictValues {
+                values,
+                target: conflict_target,
+                action,
+                where_clause,
+            } = records;
+            values
+                .values
+                .into_iter()
+                .map(|record| {
+                    let records = OnConflictValues {
+                        values: record,
+                        target: conflict_target,
+                        action,
+                        where_clause,
+                    };
+                    InsertStatement::new(target, records, operator, returning)
+                })
+                .collect()
+        }
+    }
+}
+
+#[cfg(feature = "i-implement-a-third-party-backend-and-opt-into-breaking-changes")]
+pub use self::third_party_support::{BatchInsertStrategy, IntoRowStatements, IntoSingleStatement};

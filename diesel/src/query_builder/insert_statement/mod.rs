@@ -29,6 +29,31 @@ pub(crate) use self::private::InsertAutoTypeHelper;
 #[cfg(feature = "__sqlite-shared")]
 mod insert_with_default_for_sqlite;
 
+/// Helper types to execute SQLite batch insert statements
+///
+/// SQLite does not support the `DEFAULT` keyword in `VALUES` clauses.
+/// Batch insert statements that might contain default values therefore need to
+/// be executed as one statement per row, while batch inserts without
+/// default values can be executed as single statement.
+///
+/// Connection implementations can use
+/// [`QueryExecutionStrategy`](crate::query_builder::QueryExecutionStrategy)
+/// to detect such statements. Their strategy is
+/// [`BatchInsertStrategy<Yes>`](BatchInsertStrategy) if the
+/// statement might contain default values (use [`IntoRowStatements`]) and
+/// [`BatchInsertStrategy<No>`](BatchInsertStrategy) otherwise
+/// (use [`IntoSingleStatement`]).
+#[cfg(all(
+    feature = "__sqlite-shared",
+    feature = "i-implement-a-third-party-backend-and-opt-into-breaking-changes"
+))]
+pub mod sqlite_batch_insert {
+    pub use super::insert_with_default_for_sqlite::{
+        BatchInsertStrategy, IntoRowStatements, IntoSingleStatement, No, SqliteBatchInsertWrapper,
+        Yes,
+    };
+}
+
 /// The structure returned by [`insert_into`].
 ///
 /// The provided methods [`values`] and [`default_values`] will insert

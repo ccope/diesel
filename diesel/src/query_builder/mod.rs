@@ -27,6 +27,8 @@ pub(crate) mod locking_clause;
 pub(crate) mod nodes;
 pub(crate) mod offset_clause;
 pub(crate) mod order_clause;
+#[cfg(feature = "i-implement-a-third-party-backend-and-opt-into-breaking-changes")]
+mod query_execution_strategy;
 pub(crate) mod select_clause;
 pub(crate) mod select_statement;
 mod sql_query;
@@ -49,11 +51,19 @@ pub use self::delete_statement::{
 #[cfg(any(feature = "mysql_backend", feature = "mariadb_backend"))]
 #[doc(inline)]
 pub use self::insert_statement::SingleRowInsertValues;
+#[cfg(all(
+    feature = "__sqlite-shared",
+    feature = "i-implement-a-third-party-backend-and-opt-into-breaking-changes"
+))]
+pub use self::insert_statement::sqlite_batch_insert;
 #[doc(inline)]
 pub use self::insert_statement::{
     IncompleteInsertOrIgnoreStatement, IncompleteInsertStatement, IncompleteReplaceStatement,
     InsertOrIgnoreStatement, InsertStatement, ReplaceStatement,
 };
+#[cfg(feature = "i-implement-a-third-party-backend-and-opt-into-breaking-changes")]
+#[doc(inline)]
+pub use self::query_execution_strategy::{QueryExecutionStrategy, SingleQueryStrategy};
 #[doc(inline)]
 pub use self::query_id::QueryId;
 #[doc(inline)]
